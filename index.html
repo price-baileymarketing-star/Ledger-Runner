@@ -95,15 +95,29 @@ const TX_LINES = [
 ];
 
 // ─── LOGO LOAD ───────────────────────────────────────────────
-// Uses GitHub's blob/...?raw=true pattern (same one their own preview uses)
-// and a cache-bust query so updated uploads always show.
-const LOGO_URL = "https://github.com/price-baileymarketing-star/Ledger-Runner/blob/main/PB%20Box%20Logo.jpg?raw=true&v=" + Date.now();
+// Tries multiple URL patterns in sequence. crossOrigin is intentionally NOT set,
+// because we only need to DRAW the image (not read pixel data), and setting it
+// causes loads to fail when GitHub's CORS headers don't cooperate.
+const LOGO_URLS = [
+  "https://raw.githubusercontent.com/price-baileymarketing-star/Ledger-Runner/main/PB%20Box%20Logo.jpg",
+  "https://github.com/price-baileymarketing-star/Ledger-Runner/raw/main/PB%20Box%20Logo.jpg",
+  "https://github.com/price-baileymarketing-star/Ledger-Runner/blob/main/PB%20Box%20Logo.jpg?raw=true"
+];
 const pbLogo = new Image();
-pbLogo.crossOrigin = "anonymous";
 let logoLoaded = false;
-pbLogo.onload  = () => { logoLoaded = true; };
-pbLogo.onerror = () => { logoLoaded = false; };
-pbLogo.src = LOGO_URL;
+let logoAttempt = 0;
+pbLogo.onload  = () => { logoLoaded = true; console.log("[Ledger Runner] Logo loaded from:", pbLogo.src); };
+pbLogo.onerror = () => {
+  logoAttempt++;
+  if (logoAttempt < LOGO_URLS.length) {
+    console.warn("[Ledger Runner] Logo load failed, trying URL #" + (logoAttempt + 1));
+    pbLogo.src = LOGO_URLS[logoAttempt] + "?v=" + Date.now();
+  } else {
+    console.error("[Ledger Runner] All logo URLs failed. Using CSS fallback badge.");
+    logoLoaded = false;
+  }
+};
+pbLogo.src = LOGO_URLS[0] + "?v=" + Date.now();
 
 // ─── AUDIO ───────────────────────────────────────────────────
 let sounds = null;
@@ -601,8 +615,8 @@ function drawLogo(cx, cy, size) {
 function drawStart() {
   ctx.fillStyle="rgba(0,0,0,0.7)"; ctx.fillRect(0,HEADER_H,W,H);
 
-  // Logo at top of start screen
-  drawLogo(W/2, H/2 - 110 + HEADER_H, 96);
+  // Logo at top of start screen — positioned with clear gap above the title
+  drawLogo(W/2, H/2 - 140 + HEADER_H, 96);
 
   ctx.fillStyle="#00ff88"; ctx.font="bold 32px 'Courier New',monospace"; ctx.textAlign="center";
   ctx.fillText("LEDGER RUNNER",W/2,H/2-40+HEADER_H);
