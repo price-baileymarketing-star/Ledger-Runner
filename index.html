@@ -66,6 +66,9 @@ const H = ROWS * CELL;   // 560
 const TUNNEL_ROW_START = 11;
 const TUNNEL_ROW_END   = 17;
 
+// Countdown timer (seconds)
+const GAME_DURATION = 100;
+
 const SYMBOLS = [
   { char: "£", color: "#cc44ff", glow: "#aa00ff", pts: 10 },
   { char: "$", color: "#00dd44", glow: "#00aa22", pts: 10 },
@@ -83,6 +86,20 @@ const TX_LINES = [
   "CHANGE £   5.01","CLIENT: ACME LTD", "TAX CODE: 20STD",
   "LEDGER RUNNER  ", "AUDIT REF: 0042 ",
 ];
+
+// ─────────────────────────────────────────────
+//  LOGO LOADING (Price Bailey box logo)
+// ─────────────────────────────────────────────
+// Cache-bust to force fresh fetch from raw.githubusercontent.com after re-upload.
+// GitHub raw responses are cached for ~5min by their CDN and aggressively by browsers,
+// so appending a unique query param guarantees the updated asset is loaded.
+const LOGO_URL = "https://raw.githubusercontent.com/price-baileymarketing-star/Ledger-Runner/main/PB%20Box%20Logo.jpg?v=" + Date.now();
+const pbLogo = new Image();
+pbLogo.crossOrigin = "anonymous";
+let logoLoaded = false;
+pbLogo.onload  = () => { logoLoaded = true; };
+pbLogo.onerror = () => { logoLoaded = false; };
+pbLogo.src = LOGO_URL;
 
 // ─────────────────────────────────────────────
 //  AUDIO  — replace URLs with your GitHub paths
@@ -141,6 +158,11 @@ function initFood(snake) {
   return Array.from({ length: 8 }, () => randFood(snake));
 }
 
+// Rotate a direction vector 90° anticlockwise (= "turn left" relative to snake)
+function turnLeft(d)  { return { x:  d.y, y: -d.x }; }
+// Rotate a direction vector 90° clockwise (= "turn right" relative to snake)
+function turnRight(d) { return { x: -d.y, y:  d.x }; }
+
 // ─────────────────────────────────────────────
 //  GAME STATE
 // ─────────────────────────────────────────────
@@ -156,6 +178,9 @@ let state = {
   particles: [],
   touchStart: null,
   frameCount: 0,
+  timeLeft: GAME_DURATION,   // seconds remaining
+  startTimestamp: 0,          // ms epoch when game began
+  endReason: null,            // "crash" | "timeout"
 };
 
 function startGame() {
@@ -173,7 +198,16 @@ function startGame() {
     particles: [],
     touchStart: null,
     frameCount: state.frameCount,
+    timeLeft: GAME_DURATION,
+    startTimestamp: performance.now(),
+    endReason: null,
   };
+}
+
+function endGame(reason) {
+  state.phase = "dead";
+  state.endReason = reason;
+  play("sfxGameOver");
 }
 
 // ─────────────────────────────────────────────
@@ -182,6 +216,14 @@ function startGame() {
 function tick() {
   if (state.phase !== "playing") return;
 
+  // Countdown — update time remaining from wall clock so it's frame-rate independent
+  const elapsed = (performance.now() - state.startTimestamp) / 1000;
+  state.timeLeft = Math.max(0, GAME_DURATION - elapsed);
+  if (state.timeLeft <= 0) {
+    endGame("timeout");
+    return;
+  }
+
   state.dir = { ...state.nextDir };
   const head = state.snake[0];
   let nx = head.x + state.dir.x;
@@ -189,24 +231,22 @@ function tick() {
 
   // Top/bottom death
   if (ny < 0 || ny >= ROWS) {
-    state.phase = "dead";
-    play("sfxGameOver");
+    endGame("crash");
     return;
   }
 
   // Left/right: tunnel wraps, else death
   if (nx < 0) {
     if (inTunnel(ny)) { nx = COLS - 1; play("sfxTunnel"); }
-    else { state.phase = "dead"; play("sfxGameOver"); return; }
+    else { endGame("crash"); return; }
   } else if (nx >= COLS) {
     if (inTunnel(ny)) { nx = 0; play("sfxTunnel"); }
-    else { state.phase = "dead"; play("sfxGameOver"); return; }
+    else { endGame("crash"); return; }
   }
 
   // Self collision
   if (state.snake.slice(0, -1).some(s => s.x === nx && s.y === ny)) {
-    state.phase = "dead";
-    play("sfxGameOver");
+    endGame("crash");
     return;
   }
 
@@ -560,44 +600,106 @@ function drawParticles(particles) {
 }
 
 // ── Header ──
-function drawHeader(score, length) {
+function drawHeader(score, length, timeLeft) {
   ctx.fillStyle="#0a0a0a"; ctx.fillRect(0,0,W,HEADER_H);
   ctx.strokeStyle="#00ff88"; ctx.lineWidth=2; ctx.strokeRect(0,0,W,HEADER_H);
   ctx.fillStyle="rgba(0,255,100,0.03)";
   for(let sl=0;sl<HEADER_H;sl+=3) ctx.fillRect(0,sl,W,1);
+
+  // Left: score
   ctx.fillStyle="#00ff88"; ctx.font="bold 16px 'Courier New',monospace"; ctx.textAlign="left";
   ctx.fillText(`SCORE: ${score.toLocaleString()}`,12,30);
-  ctx.fillStyle="#fff"; ctx.font="bold 20px 'Courier New',monospace"; ctx.textAlign="center";
-  ctx.fillText("LEDGER RUNNER",W/2,30);
+
+  // Centre: timer (colour shifts red as it runs low, pulses under 10s)
+  const t = Math.ceil(timeLeft);
+  let timerColor = "#ffdd00";
+  if (t <= 10) timerColor = "#ff4444";
+  else if (t <= 30) timerColor = "#ff8800";
+  const pulse = (t <= 10) ? (0.7 + 0.3 * Math.sin(state.frameCount * 0.4)) : 1;
+  ctx.fillStyle = timerColor;
+  ctx.globalAlpha = pulse;
+  ctx.font="bold 22px 'Courier New',monospace"; ctx.textAlign="center";
+  ctx.shadowColor = timerColor; ctx.shadowBlur = (t <= 10) ? 12 : 6;
+  ctx.fillText(`⏱ ${String(t).padStart(3,"0")}s`, W/2, 32);
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+
+  // Right: length
   ctx.fillStyle="#00ff88"; ctx.font="bold 16px 'Courier New',monospace"; ctx.textAlign="right";
   ctx.fillText(`LENGTH: ${length}`,W-12,30);
 }
 
+// ── Logo helper (draws the PB box logo at given centre, with fallback) ──
+function drawLogo(cx, cy, size) {
+  if (logoLoaded) {
+    // Subtle glow behind the logo
+    ctx.save();
+    ctx.shadowColor = "rgba(0,255,136,0.4)";
+    ctx.shadowBlur = 20;
+    ctx.drawImage(pbLogo, cx - size/2, cy - size/2, size, size);
+    ctx.restore();
+  } else {
+    // Fallback: stylised PB box badge so the screen still feels branded
+    ctx.save();
+    ctx.fillStyle = "#008B8B";
+    ctx.fillRect(cx - size/2, cy - size/2, size/2, size);
+    ctx.fillStyle = "#f5f5f5";
+    ctx.fillRect(cx, cy - size/2, size/2, size);
+    ctx.fillStyle = "#000";
+    ctx.font = `italic bold ${size*0.55}px Georgia,serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("p", cx - size*0.22, cy);
+    ctx.fillText("b", cx + size*0.22, cy);
+    ctx.strokeStyle = "rgba(0,0,0,0.3)"; ctx.lineWidth = 1;
+    ctx.strokeRect(cx - size/2, cy - size/2, size, size);
+    ctx.restore();
+  }
+}
+
 // ── Overlays ──
 function drawStart() {
-  ctx.fillStyle="rgba(0,0,0,0.6)"; ctx.fillRect(0,HEADER_H,W,H);
+  ctx.fillStyle="rgba(0,0,0,0.7)"; ctx.fillRect(0,HEADER_H,W,H);
+
+  // Logo at the top of the start screen
+  drawLogo(W/2, H/2 - 110 + HEADER_H, 96);
+
   ctx.fillStyle="#00ff88"; ctx.font="bold 32px 'Courier New',monospace"; ctx.textAlign="center";
   ctx.fillText("LEDGER RUNNER",W/2,H/2-40+HEADER_H);
   ctx.fillStyle="#aaffcc"; ctx.font="14px 'Courier New',monospace";
   ctx.fillText("Use the ESCAPE TUNNELS (centre left/right) to wrap around.",W/2,H/2+HEADER_H);
   ctx.fillStyle="#ff6644"; ctx.font="13px 'Courier New',monospace";
   ctx.fillText("Hit the walls elsewhere → GAME OVER",W/2,H/2+22+HEADER_H);
+
+  // New: timer rule
+  ctx.fillStyle="#ffdd00"; ctx.font="bold 14px 'Courier New',monospace";
+  ctx.fillText(`Score as high as possible in ${GAME_DURATION} seconds`, W/2, H/2 + 44 + HEADER_H);
+
   ctx.fillStyle="#ffdd00"; ctx.font="bold 20px 'Courier New',monospace";
-  ctx.fillText("TAP or press any key to start",W/2,H/2+56+HEADER_H);
+  ctx.fillText("TAP or press any key to start",W/2,H/2+78+HEADER_H);
 }
 
 function drawDead() {
   ctx.fillStyle="rgba(0,0,0,0.75)"; ctx.fillRect(0,HEADER_H,W,H);
+
+  // Logo above the panel
+  drawLogo(W/2, H/2 - 165 + HEADER_H, 72);
+
   ctx.fillStyle="#0d1117"; ctx.strokeStyle="#ff4444"; ctx.lineWidth=2;
-  ctx.beginPath(); ctx.roundRect(W/2-190,H/2-95+HEADER_H,380,230,8); ctx.fill(); ctx.stroke();
-  ctx.fillStyle="#ff4444"; ctx.font="bold 28px 'Courier New',monospace"; ctx.textAlign="center";
+  ctx.beginPath(); ctx.roundRect(W/2-190,H/2-95+HEADER_H,380,250,8); ctx.fill(); ctx.stroke();
+
+  // Title varies subtly by end reason but stays within approved copy
+  ctx.fillStyle = state.endReason === "timeout" ? "#ffdd00" : "#ff4444";
+  ctx.font="bold 28px 'Courier New',monospace"; ctx.textAlign="center";
   ctx.fillText("RETURN COMPLETE",W/2,H/2-55+HEADER_H);
+
   ctx.fillStyle="#888"; ctx.font="14px 'Courier New',monospace";
   ctx.fillText("The ledger has been balanced.",W/2,H/2-25+HEADER_H);
+
   ctx.fillStyle="#00ff88"; ctx.font="bold 20px 'Courier New',monospace";
   ctx.fillText(`FINAL SCORE: ${state.score.toLocaleString()}`,W/2,H/2+15+HEADER_H);
   ctx.fillStyle="#ffdd00"; ctx.font="14px 'Courier New',monospace";
   ctx.fillText(`Receipt Length: ${state.length}`,W/2,H/2+42+HEADER_H);
+
   // Restart button
   ctx.fillStyle="#00ff88";
   ctx.beginPath(); ctx.roundRect(W/2-80,H/2+68+HEADER_H,160,40,6); ctx.fill();
@@ -626,12 +728,12 @@ function render() {
   drawParticles(state.particles);
   drawPen();
   ctx.restore();
-  drawHeader(state.score, state.length);
+  drawHeader(state.score, state.length, state.timeLeft);
 
   if(state.phase==="start") drawStart();
   if(state.phase==="dead")  drawDead();
 
-  // Touch control hint overlay (tablets)
+  // Touch control hint overlay (tablets / phones)
   if(state.phase === "playing") drawTouchHints();
 
   // Tap ripples (touch feedback)
@@ -663,100 +765,65 @@ function drawTapRipples() {
   });
 }
 
+// ── Touch hints: simplified to LEFT / RIGHT only, positioned away from tunnels ──
 function drawTouchHints() {
-  const d = state.dir;
   const TOP = HEADER_H;
   const pulse = 0.5 + 0.5 * Math.sin(state.frameCount * 0.05);
 
+  // Position the L/R indicators near the BOTTOM of the playfield, well clear of
+  // the tunnels (which sit at vertical centre, rows 11–17) and under the player's
+  // thumbs for natural mobile ergonomics. Controls are relative (tap left = turn
+  // snake's left, tap right = turn snake's right), so labels never have to swap.
+  const indicatorY = TOP + H - 70;
+  const leftCx     = 80;
+  const rightCx    = W - 80;
+
   ctx.save();
 
-  // Split the playfield into two tap halves with a divider line
-  const horizontal = d.x !== 0; // moving left or right → split into TOP/BOTTOM halves
-  const midX = W / 2;
-  const midY = TOP + H / 2;
-
-  // Divider line (animated dashes)
-  ctx.strokeStyle = `rgba(0,220,255,${0.25 + 0.15 * pulse})`;
+  // Vertical divider down the middle of the playfield (subtle, animated)
+  ctx.strokeStyle = `rgba(0,220,255,${0.18 + 0.10 * pulse})`;
   ctx.lineWidth = 1.5;
   ctx.setLineDash([6, 8]);
   ctx.lineDashOffset = -state.frameCount * 0.3;
   ctx.beginPath();
-  if (horizontal) {
-    ctx.moveTo(0, midY);
-    ctx.lineTo(W, midY);
-  } else {
-    ctx.moveTo(midX, TOP);
-    ctx.lineTo(midX, TOP + H);
-  }
+  ctx.moveTo(W/2, TOP);
+  ctx.lineTo(W/2, TOP + H);
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // Determine the two resulting directions for each half
-  let zoneA, zoneB;
-  if (d.x === 1) {
-    // moving right
-    zoneA = { rect: [0, TOP, W, H/2],            arrow: "↑", label: "TAP TOP" };
-    zoneB = { rect: [0, TOP + H/2, W, H/2],      arrow: "↓", label: "TAP BOTTOM" };
-  } else if (d.x === -1) {
-    // moving left
-    zoneA = { rect: [0, TOP, W, H/2],            arrow: "↑", label: "TAP TOP" };
-    zoneB = { rect: [0, TOP + H/2, W, H/2],      arrow: "↓", label: "TAP BOTTOM" };
-  } else if (d.y === -1) {
-    // moving up
-    zoneA = { rect: [0, TOP, W/2, H],            arrow: "←", label: "TAP LEFT" };
-    zoneB = { rect: [W/2, TOP, W/2, H],          arrow: "→", label: "TAP RIGHT" };
-  } else {
-    // moving down — mirrored (tap left → snake turns RIGHT relative to world)
-    zoneA = { rect: [0, TOP, W/2, H],            arrow: "→", label: "TAP LEFT" };
-    zoneB = { rect: [W/2, TOP, W/2, H],          arrow: "←", label: "TAP RIGHT" };
-  }
-
-  // Draw big translucent arrows in each zone — anchored at the OUTER edge
-  // so they don't crowd the centre where gameplay happens
-  const drawArrow = (zone, anchor) => {
-    const [zx, zy, zw, zh] = zone.rect;
-    let ax, ay;
-    if (anchor === "top")    { ax = zx + zw/2; ay = zy + 50; }
-    if (anchor === "bottom") { ax = zx + zw/2; ay = zy + zh - 50; }
-    if (anchor === "left")   { ax = zx + 60;   ay = zy + zh/2; }
-    if (anchor === "right")  { ax = zx + zw - 60; ay = zy + zh/2; }
-
-    // Glow background circle
-    ctx.fillStyle = `rgba(0,220,255,${0.06 + 0.04 * pulse})`;
+  // Helper to draw a single tap zone
+  const drawZone = (cx, cy, arrow, label) => {
+    // Glow background
+    ctx.fillStyle = `rgba(0,220,255,${0.08 + 0.05 * pulse})`;
     ctx.beginPath();
-    ctx.arc(ax, ay, 42, 0, Math.PI * 2);
+    ctx.arc(cx, cy, 46, 0, Math.PI * 2);
     ctx.fill();
 
-    // Arrow ring
-    ctx.strokeStyle = `rgba(0,220,255,${0.4 + 0.2 * pulse})`;
-    ctx.lineWidth = 2;
+    // Ring
+    ctx.strokeStyle = `rgba(0,220,255,${0.45 + 0.20 * pulse})`;
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.arc(ax, ay, 34, 0, Math.PI * 2);
+    ctx.arc(cx, cy, 38, 0, Math.PI * 2);
     ctx.stroke();
 
     // Arrow glyph
-    ctx.fillStyle = `rgba(180,240,255,${0.85 + 0.15 * pulse})`;
-    ctx.shadowColor = "rgba(0,220,255,0.8)";
-    ctx.shadowBlur = 12;
-    ctx.font = "bold 42px Arial, sans-serif";
+    ctx.fillStyle = `rgba(200,245,255,${0.9 + 0.10 * pulse})`;
+    ctx.shadowColor = "rgba(0,220,255,0.9)";
+    ctx.shadowBlur = 14;
+    ctx.font = "bold 46px Arial, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(zone.arrow, ax, ay);
+    ctx.fillText(arrow, cx, cy);
     ctx.shadowBlur = 0;
 
-    // Label under the circle
-    ctx.fillStyle = `rgba(0,220,255,0.75)`;
-    ctx.font = "bold 10px 'Courier New', monospace";
-    ctx.fillText(zone.label, ax, ay + 56);
+    // Label (positioned ABOVE the circle since indicators are at bottom of screen)
+    ctx.fillStyle = "rgba(0,220,255,0.85)";
+    ctx.font = "bold 11px 'Courier New', monospace";
+    ctx.fillText(label, cx, cy - 56);
   };
 
-  if (horizontal) {
-    drawArrow(zoneA, "top");
-    drawArrow(zoneB, "bottom");
-  } else {
-    drawArrow(zoneA, "left");
-    drawArrow(zoneB, "right");
-  }
+  drawZone(leftCx,  indicatorY, "←", "TAP LEFT");
+  drawZone(rightCx, indicatorY, "→", "TAP RIGHT");
 
   ctx.restore();
 }
@@ -767,7 +834,7 @@ function drawTouchHints() {
 setInterval(tick, 120);
 
 // ─────────────────────────────────────────────
-//  INPUT — KEYBOARD
+//  INPUT — KEYBOARD (absolute directions kept for desktop)
 // ─────────────────────────────────────────────
 document.addEventListener("keydown", e => {
   if(state.phase==="start"||state.phase==="dead"){ startGame(); return; }
@@ -778,7 +845,7 @@ document.addEventListener("keydown", e => {
 });
 
 // ─────────────────────────────────────────────
-//  INPUT — TOUCH
+//  INPUT — TOUCH (relative L/R turning)
 // ─────────────────────────────────────────────
 canvas.addEventListener("touchstart", e => {
   e.preventDefault();
@@ -796,51 +863,49 @@ canvas.addEventListener("touchend", e => {
   const ax=Math.abs(dx), ay=Math.abs(dy);
   const SWIPE_THRESHOLD = 18;
 
-  if(ax > SWIPE_THRESHOLD || ay > SWIPE_THRESHOLD){
-    if(ax>ay){
-      if(dx>0&&state.dir.x!==-1) state.nextDir={x:1,y:0};
-      else if(dx<0&&state.dir.x!==1) state.nextDir={x:-1,y:0};
+  // Convert tap/swipe → left or right TURN relative to current direction
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = W/rect.width;
+  const tapX = (e.changedTouches[0].clientX - rect.left) * scaleX;
+
+  let turnDirection = null; // "left" or "right"
+
+  if (ax > SWIPE_THRESHOLD || ay > SWIPE_THRESHOLD) {
+    // Swipe gesture: only horizontal swipes count, and they map to L/R turns
+    if (ax > ay) {
+      turnDirection = dx < 0 ? "left" : "right";
     } else {
-      if(dy>0&&state.dir.y!==-1) state.nextDir={x:0,y:1};
-      else if(dy<0&&state.dir.y!==1) state.nextDir={x:0,y:-1};
+      // Vertical swipes are ignored in L/R-only mode — treat as tap on whichever side
+      turnDirection = tapX < W/2 ? "left" : "right";
     }
   } else {
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = W/rect.width, scaleY=(H+HEADER_H)/rect.height;
-    const tapX = (e.changedTouches[0].clientX - rect.left) * scaleX;
-    const tapY = (e.changedTouches[0].clientY - rect.top) * scaleY;
-    const halfW = W / 2;
-    const halfH = (H + HEADER_H) / 2;
-    const tapRight = tapX > halfW;
-    const tapBottom = tapY > halfH;
+    // Tap: left half of canvas = turn left, right half = turn right
+    turnDirection = tapX < W/2 ? "left" : "right";
 
     // Spawn ripple at tap location for visual feedback
+    const scaleY = (H+HEADER_H)/rect.height;
+    const tapY = (e.changedTouches[0].clientY - rect.top) * scaleY;
     tapRipples.push({ x: tapX, y: tapY, life: 24, maxLife: 24 });
-
-    const d = state.dir;
-    if(d.x === 1){
-      state.nextDir = tapBottom ? {x:0,y:1} : {x:0,y:-1};
-    } else if(d.x === -1){
-      state.nextDir = tapBottom ? {x:0,y:1} : {x:0,y:-1};
-    } else if(d.y === -1){
-      state.nextDir = tapRight ? {x:1,y:0} : {x:-1,y:0};
-    } else if(d.y === 1){
-      state.nextDir = tapRight ? {x:-1,y:0} : {x:1,y:0};
-    }
   }
+
+  if (turnDirection === "left")  state.nextDir = turnLeft(state.dir);
+  if (turnDirection === "right") state.nextDir = turnRight(state.dir);
+
   state.touchStart=null;
 }, { passive: false });
 
 // ─────────────────────────────────────────────
-//  INPUT — CLICK (restart button)
+//  INPUT — CLICK (mouse: L/R relative turning during play, plus menu buttons)
 // ─────────────────────────────────────────────
 canvas.addEventListener("click", e => {
   if(state.phase==="start"){ startGame(); return; }
+
+  const rect=canvas.getBoundingClientRect();
+  const scaleX=W/rect.width, scaleY=(H+HEADER_H)/rect.height;
+  const cx=(e.clientX-rect.left)*scaleX;
+  const cy=(e.clientY-rect.top)*scaleY;
+
   if(state.phase==="dead"){
-    const rect=canvas.getBoundingClientRect();
-    const scaleX=W/rect.width, scaleY=(H+HEADER_H)/rect.height;
-    const cx=(e.clientX-rect.left)*scaleX;
-    const cy=(e.clientY-rect.top)*scaleY;
     // Restart button
     const bx=W/2-80, by=H/2+68+HEADER_H;
     if(cx>=bx&&cx<=bx+160&&cy>=by&&cy<=by+40){ startGame(); return; }
@@ -849,6 +914,14 @@ canvas.addEventListener("click", e => {
     if(cx>=ctax&&cx<=ctax+320&&cy>=ctay&&cy<=ctay+40){
       window.open("https://www.pricebailey.co.uk/enquiry-form/","_blank","noopener,noreferrer");
     }
+    return;
+  }
+
+  // Mouse click during play → L/R relative turn (matches touch behaviour)
+  if(state.phase==="playing"){
+    if (cx < W/2) state.nextDir = turnLeft(state.dir);
+    else          state.nextDir = turnRight(state.dir);
+    tapRipples.push({ x: cx, y: cy, life: 24, maxLife: 24 });
   }
 });
 
