@@ -90,10 +90,10 @@ const TX_LINES = [
 // ─────────────────────────────────────────────
 //  LOGO LOADING (Price Bailey box logo)
 // ─────────────────────────────────────────────
-// Cache-bust to force fresh fetch from raw.githubusercontent.com after re-upload.
-// GitHub raw responses are cached for ~5min by their CDN and aggressively by browsers,
-// so appending a unique query param guarantees the updated asset is loaded.
-const LOGO_URL = "https://raw.githubusercontent.com/price-baileymarketing-star/Ledger-Runner/main/PB%20Box%20Logo.jpg?v=" + Date.now();
+// Use github.com/.../?raw=true (same URL pattern GitHub's own file preview uses)
+// rather than raw.githubusercontent.com, which can serve stale cached versions
+// of recently re-uploaded files. Cache-buster on top of that forces a fresh fetch.
+const LOGO_URL = "https://github.com/price-baileymarketing-star/Ledger-Runner/blob/main/PB%20Box%20Logo.jpg?raw=true&v=" + Date.now();
 const pbLogo = new Image();
 pbLogo.crossOrigin = "anonymous";
 let logoLoaded = false;
