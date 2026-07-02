@@ -630,13 +630,44 @@ function drawStart() {
   ctx.fillText("TAP or press any key to start",W/2,H/2+78+HEADER_H);
 }
 
+// ─── ENQUIRY FORM (lead capture) ─────────────────────────────
+// Passes the final score + this game's URL as WPForms prefill params (same tab),
+// matching the Control Freak reference implementation.
+const FORM_BASE     = "https://www.pricebailey.co.uk/enquiry-form/game/";
+const SCORE_FIELD   = "wpf72332_23";  // score field
+const GAMEURL_FIELD = "wpf72332_30";  // Game_URL field (field id 30, from the form source)
+const GAME_URL      = "https://price-baileymarketing-star.github.io/Ledger-Runner/"; // TODO: confirm live GitHub Pages URL
+
+function openEnquiryForm() {
+  const params = new URLSearchParams();
+  params.set(SCORE_FIELD, Math.max(0, state.score));
+  params.set(GAMEURL_FIELD, GAME_URL);
+  window.location.href = FORM_BASE + "?" + params.toString(); // same tab
+}
+
+// End-screen button rectangles, shared by the renderer and the hit-testers so
+// the drawn buttons and the tappable areas can never drift apart.
+function deadButtons() {
+  return {
+    form:    { x: W/2 - 150, y: H/2 + 46  + HEADER_H, w: 300, h: 48 }, // main CTA
+    restart: { x: W/2 - 70,  y: H/2 + 104 + HEADER_H, w: 140, h: 34 }, // secondary
+  };
+}
+function hitDeadButton(cx, cy) {
+  const b = deadButtons();
+  const inside = r => cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h;
+  if (inside(b.form))    return "form";
+  if (inside(b.restart)) return "restart";
+  return null;
+}
+
 function drawDead() {
   ctx.fillStyle="rgba(0,0,0,0.75)"; ctx.fillRect(0,HEADER_H,W,H);
 
   drawLogo(W/2, H/2 - 165 + HEADER_H, 72);
 
   ctx.fillStyle="#0d1117"; ctx.strokeStyle="#ff4444"; ctx.lineWidth=2;
-  ctx.beginPath(); ctx.roundRect(W/2-190,H/2-95+HEADER_H,380,250,8); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.roundRect(W/2-190,H/2-95+HEADER_H,380,262,8); ctx.fill(); ctx.stroke();
 
   ctx.fillStyle = state.endReason === "timeout" ? "#ffdd00" : "#ff4444";
   ctx.font="bold 28px 'Courier New',monospace"; ctx.textAlign="center";
@@ -646,20 +677,30 @@ function drawDead() {
   ctx.fillText("The ledger has been balanced.",W/2,H/2-25+HEADER_H);
 
   ctx.fillStyle="#00ff88"; ctx.font="bold 20px 'Courier New',monospace";
-  ctx.fillText(`FINAL SCORE: ${state.score.toLocaleString()}`,W/2,H/2+15+HEADER_H);
+  ctx.fillText(`FINAL SCORE: ${state.score.toLocaleString()}`,W/2,H/2+2+HEADER_H);
   ctx.fillStyle="#ffdd00"; ctx.font="14px 'Courier New',monospace";
-  ctx.fillText(`Receipt Length: ${state.length}`,W/2,H/2+42+HEADER_H);
+  ctx.fillText(`Receipt Length: ${state.length}`,W/2,H/2+26+HEADER_H);
 
-  ctx.fillStyle="#00ff88";
-  ctx.beginPath(); ctx.roundRect(W/2-80,H/2+68+HEADER_H,160,40,6); ctx.fill();
-  ctx.fillStyle="#0a0a0a"; ctx.font="bold 16px 'Courier New',monospace";
-  ctx.fillText("RESTART",W/2,H/2+94+HEADER_H);
+  const btns = deadButtons();
+  ctx.textBaseline = "middle";
 
-  ctx.fillStyle="#1a2540";
-  ctx.strokeStyle="#4488ff"; ctx.lineWidth=2;
-  ctx.beginPath(); ctx.roundRect(W/2-160,H/2+118+HEADER_H,320,40,6); ctx.fill(); ctx.stroke();
-  ctx.fillStyle="#4488ff"; ctx.font="bold 13px 'Courier New',monospace";
-  ctx.fillText("💬 Talk to the Price Bailey team →",W/2,H/2+144+HEADER_H);
+  // MAIN CTA: Leave your details (opens the enquiry form)
+  ctx.save();
+  ctx.shadowColor = "rgba(0,255,136,0.5)"; ctx.shadowBlur = 16;
+  ctx.fillStyle = "#00ff88";
+  ctx.beginPath(); ctx.roundRect(btns.form.x, btns.form.y, btns.form.w, btns.form.h, 8); ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = "#0a0a0a"; ctx.font = "bold 17px 'Courier New',monospace"; ctx.textAlign = "center";
+  ctx.fillText("LEAVE YOUR DETAILS →", btns.form.x + btns.form.w/2, btns.form.y + btns.form.h/2);
+
+  // SECONDARY: Restart (smaller, outlined)
+  ctx.fillStyle = "rgba(0,255,136,0.06)";
+  ctx.strokeStyle = "rgba(0,255,136,0.5)"; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(btns.restart.x, btns.restart.y, btns.restart.w, btns.restart.h, 6); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = "#88ffbb"; ctx.font = "bold 13px 'Courier New',monospace";
+  ctx.fillText("RESTART", btns.restart.x + btns.restart.w/2, btns.restart.y + btns.restart.h/2);
+
+  ctx.textBaseline = "alphabetic";
 }
 
 let tapRipples = [];
@@ -781,11 +822,25 @@ document.addEventListener("keydown", e => {
 canvas.addEventListener("touchstart", e => {
   e.preventDefault();
   state.touchStart={ x:e.touches[0].clientX, y:e.touches[0].clientY };
-  if(state.phase==="start"||state.phase==="dead") startGame();
+  if(state.phase==="start") startGame();
 }, { passive: false });
 
 canvas.addEventListener("touchend", e => {
   e.preventDefault();
+
+  // End screen: tap the drawn buttons (form is main, restart is secondary)
+  if (state.phase === "dead") {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = W/rect.width, scaleY = (H+HEADER_H)/rect.height;
+    const cx = (e.changedTouches[0].clientX - rect.left) * scaleX;
+    const cy = (e.changedTouches[0].clientY - rect.top)  * scaleY;
+    const hit = hitDeadButton(cx, cy);
+    if (hit === "form")    openEnquiryForm();
+    else if (hit === "restart") startGame();
+    state.touchStart = null;
+    return;
+  }
+
   if(!state.touchStart||state.phase!=="playing") return;
   const dx=e.changedTouches[0].clientX-state.touchStart.x;
   const dy=e.changedTouches[0].clientY-state.touchStart.y;
@@ -824,12 +879,9 @@ canvas.addEventListener("click", e => {
   const cy=(e.clientY-rect.top)*scaleY;
 
   if(state.phase==="dead"){
-    const bx=W/2-80, by=H/2+68+HEADER_H;
-    if(cx>=bx&&cx<=bx+160&&cy>=by&&cy<=by+40){ startGame(); return; }
-    const ctax=W/2-160, ctay=H/2+118+HEADER_H;
-    if(cx>=ctax&&cx<=ctax+320&&cy>=ctay&&cy<=ctay+40){
-      window.open("https://www.pricebailey.co.uk/enquiry-form/","_blank","noopener,noreferrer");
-    }
+    const hit = hitDeadButton(cx, cy);
+    if (hit === "form")    openEnquiryForm();
+    else if (hit === "restart") startGame();
     return;
   }
 
